@@ -1,4 +1,4 @@
-import { constants, Contract, providers } from 'ethers';
+import { BigNumber, constants, Contract, providers } from 'ethers';
 import { BytesLike, getAddress } from 'ethers/lib/utils';
 import { MULTCALL2_ADDRESS } from './constants';
 
@@ -21,6 +21,12 @@ export type ERC721 = {
   address: string;
   name: string;
   symbol: string;
+};
+
+export type ERC721Item = {
+  id: BigNumber;
+  uri: string;
+  weight?: BigNumber;
 };
 
 /**

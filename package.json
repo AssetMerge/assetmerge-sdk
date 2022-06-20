@@ -42,7 +42,7 @@
   },
   "dependencies": {
     "ethers": "^5.6.8",
-    "ether-state": "1.0.0"
+    "ether-state": "0.0.1"
   },
   "devDependencies": {
     "@ava/typescript": "^1.1.1",
