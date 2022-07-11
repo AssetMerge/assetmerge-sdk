@@ -50,7 +50,19 @@ export const createBuyParams = (ftToken: ERC20, nftToken: ERC721, to: string, it
   return [total, ftToken.address, nftToken.address, ids, to];
 }
 
-export const createSellParams = (ftToken: ERC20, nftToken: ERC721, to: string, items: ERC721Item[], ftReserves: BigNumber, nftReserves: BigNumber): [string, string, BigNumber[], BigNumber, string] => {
+export const createSellParams = (nftToken: ERC721, to: string, items: ERC721Item[], ftReserves: BigNumber, nftReserves: BigNumber): [string, BigNumber[], BigNumber, string] => {
+  const ids = items.map(nft => nft.id);
+  const { total } = getSellPrices(items, ftReserves, nftReserves)
+  return [nftToken.address, ids, total, to];
+}
+
+export const createEtherBuyParams = (nftToken: ERC721, to: string, items: ERC721Item[], ftReserves: BigNumber, nftReserves: BigNumber): [string, BigNumber[], string, { value: BigNumber }] => {
+  const ids = items.map(nft => nft.id);
+  const { total } = getBuyPrices(items, ftReserves, nftReserves)
+  return [nftToken.address, ids, to, { value: total }];
+}
+
+export const createEtherSellParams = (ftToken: ERC20, nftToken: ERC721, to: string, items: ERC721Item[], ftReserves: BigNumber, nftReserves: BigNumber): [string, string, BigNumber[], BigNumber, string] => {
   const ids = items.map(nft => nft.id);
   const { total } = getSellPrices(items, ftReserves, nftReserves)
   return [ftToken.address, nftToken.address, ids, total, to];
