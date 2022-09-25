@@ -36,7 +36,6 @@ export class LiquidityPool {
   nftReserves: BigNumber;
   lpSupply: BigNumber;
   nfts: BalanceManager;
-  provider: providers.Provider
   _sync: Sync
   stateCallback: (newData: { ftReserves: BigNumber, nftReserves: BigNumber }) => void
 
@@ -124,7 +123,6 @@ export class EtherLiquidityPool {
   nftReserves: BigNumber;
   lpSupply: BigNumber;
   nfts: BalanceManager;
-  provider: providers.Provider
   _sync: Sync
   stateCallback: (newData: { ftReserves: BigNumber, nftReserves: BigNumber }) => void
 

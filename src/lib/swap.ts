@@ -62,8 +62,8 @@ export const createEtherBuyParams = (nftToken: ERC721, to: string, items: ERC721
   return [nftToken.address, ids, to, { value: total }];
 }
 
-export const createEtherSellParams = (ftToken: ERC20, nftToken: ERC721, to: string, items: ERC721Item[], ftReserves: BigNumber, nftReserves: BigNumber): [string, string, BigNumber[], BigNumber, string] => {
+export const createEtherSellParams = (nftToken: ERC721, to: string, items: ERC721Item[], ftReserves: BigNumber, nftReserves: BigNumber): [string, BigNumber[], BigNumber, string] => {
   const ids = items.map(nft => nft.id);
   const { total } = getSellPrices(items, ftReserves, nftReserves)
-  return [ftToken.address, nftToken.address, ids, total, to];
+  return [nftToken.address, ids, total, to];
 }

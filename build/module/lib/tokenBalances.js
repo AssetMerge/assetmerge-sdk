@@ -1,0 +1,165 @@
+import { BigNumber, constants, Contract, utils } from 'ethers';
+import { getAddress } from 'ethers/lib/utils';
+import { MULTCALL2_ADDRESS } from './constants';
+import { ERC721Interface, ERC721PoolInterface, Multicall2Interface, } from './interfaces';
+export const getBalance = async (token, address, provider, liquidityPool = null) => {
+    try {
+        const [inTransfers, outTransfers] = await Promise.all([
+            provider.getLogs({
+                address: token.address,
+                fromBlock: 0,
+                topics: [
+                    utils.id('Transfer(address,address,uint256)'),
+                    null,
+                    utils.hexZeroPad(address, 32),
+                ],
+            }),
+            provider.getLogs({
+                address: token.address,
+                fromBlock: 0,
+                topics: [
+                    utils.id('Transfer(address,address,uint256)'),
+                    utils.hexZeroPad(address, 32),
+                ],
+            }),
+        ]);
+        const count = {};
+        inTransfers.forEach((log) => {
+            const { tokenId } = ERC721Interface.decodeEventLog('Transfer', log.data, log.topics);
+            const id = tokenId.toString();
+            if (count[id])
+                count[id] = count[id] + 1;
+            else
+                count[id] = 1;
+        });
+        outTransfers.forEach((log) => {
+            const { tokenId } = ERC721Interface.decodeEventLog('Transfer', log.data, log.topics);
+            const id = tokenId.toString();
+            if (count[id])
+                count[id] = count[id] - 1;
+        });
+        const historicalIds = [
+            ...new Set(Object.keys(count).filter((id) => count[id] > 0)),
+        ].map((idString) => BigNumber.from(idString));
+        const multicall = new Contract(MULTCALL2_ADDRESS, Multicall2Interface, provider);
+        const ownerCalls = historicalIds.map((id) => ({
+            target: token.address,
+            callData: ERC721Interface.encodeFunctionData('ownerOf', [id]),
+        }));
+        const ownerReturnData = await multicall.callStatic.aggregate(ownerCalls);
+        const ids = ownerReturnData[1]
+            .map((data, index) => ({
+            id: historicalIds[index],
+            owner: ERC721Interface.decodeFunctionResult('ownerOf', data)[0],
+        })).filter((item) => getAddress(item.owner) === getAddress(address))
+            .map((item) => item.id);
+        const uriCalls = ids.map((id) => ({ target: token.address, callData: ERC721Interface.encodeFunctionData('tokenURI', [id]) }));
+        const uris = await multicall.callStatic.aggregate(uriCalls);
+        if (liquidityPool) {
+            const weightCalls = ids.map((id) => ({
+                target: liquidityPool,
+                callData: ERC721PoolInterface.encodeFunctionData('getNFTWeight', [
+                    id,
+                ]),
+            }));
+            const weightResult = await multicall.callStatic.aggregate(weightCalls);
+            const items = ids.map((id, index) => {
+                const uri = ERC721Interface.decodeFunctionResult('tokenURI', uris[1][index])[0];
+                let weight = ERC721PoolInterface.decodeFunctionResult('getNFTWeight', weightResult[1][index])[0];
+                if (weight.eq(0))
+                    weight = constants.WeiPerEther;
+                return { id, uri, weight };
+            });
+            return items;
+        }
+        else {
+            const items = ids.map((id, index) => {
+                const uri = ERC721Interface.decodeFunctionResult('tokenURI', uris[1][index])[0];
+                return { id, uri };
+            });
+            return items;
+        }
+    }
+    catch (error) {
+        throw error;
+    }
+};
+export const createBalanceManager = (token, address, provider, liquidityPool = null, updateCallback) => new Promise(async (resolve, reject) => {
+    try {
+        const items = await getBalance(token, address, provider, liquidityPool);
+        resolve(new BalanceManager(token, address, provider, liquidityPool, items, updateCallback ?? null));
+    }
+    catch (error) {
+        reject(error);
+    }
+});
+export class BalanceManager {
+    token;
+    address;
+    _nft;
+    _liquidityPool;
+    _liquidityPoolAddr;
+    items;
+    updateCallback;
+    provider;
+    constructor(token, address, provider, liquidityPool = null, items, updateCallback) {
+        this.token = token;
+        this.items = items;
+        this.address = getAddress(address);
+        this.provider = provider;
+        this.updateCallback = updateCallback ?? null;
+        this._nft = new Contract(token.address, ERC721Interface, provider);
+        if (liquidityPool) {
+            this._liquidityPool = new Contract(liquidityPool, ERC721PoolInterface, provider);
+            this._liquidityPoolAddr = liquidityPool;
+        }
+        if (this.updateCallback)
+            this.updateCallback(this.items);
+        this.provider.on({
+            address: this.token.address,
+            topics: [
+                utils.id("Transfer(address,address,uint256)"),
+                null,
+                utils.hexZeroPad(this.address, 32)
+            ]
+        }, async (log) => {
+            const { to, tokenId } = ERC721Interface.decodeEventLog('Transfer', log.data, log.topics);
+            let weight;
+            if (this._liquidityPoolAddr) {
+                weight = await this._liquidityPool.getNFTWeight(tokenId);
+                if (weight.eq(0))
+                    weight = constants.WeiPerEther;
+            }
+            const uri = this._nft.tokenURI(tokenId);
+            if (to === this.address && this.items.findIndex((item) => item.id.eq(tokenId)) < 0) {
+                if (weight)
+                    this.items.push({ id: tokenId, weight, uri });
+                else
+                    this.items.push({ id: tokenId, uri });
+            }
+            else if (this._liquidityPoolAddr) {
+                this.items[this.items.findIndex((item) => item.id.eq(tokenId))].weight = weight;
+            }
+            if (this.updateCallback)
+                this.updateCallback(this.items);
+        });
+        this.provider.on({
+            address: this.token.address,
+            topics: [
+                utils.id("Transfer(address,address,uint256)"),
+                utils.hexZeroPad(this.address, 32)
+            ]
+        }, async (log) => {
+            const { from, tokenId } = ERC721Interface.decodeEventLog('Transfer', log.data, log.topics);
+            if (from === this.address && this.items.findIndex((item) => item.id.eq(tokenId)) >= 0) {
+                this.items.splice(this.items.findIndex((item) => item.id.eq(tokenId)), 1);
+            }
+            if (this.updateCallback)
+                this.updateCallback(this.items);
+        });
+    }
+    stopUpdates() {
+        this.provider.removeAllListeners();
+    }
+}
+//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJmaWxlIjoidG9rZW5CYWxhbmNlcy5qcyIsInNvdXJjZVJvb3QiOiIiLCJzb3VyY2VzIjpbIi4uLy4uLy4uL3NyYy9saWIvdG9rZW5CYWxhbmNlcy50cyJdLCJuYW1lcyI6W10sIm1hcHBpbmdzIjoiQUFBQSxPQUFPLEVBQUUsU0FBUyxFQUFhLFNBQVMsRUFBRSxRQUFRLEVBQWEsS0FBSyxFQUFFLE1BQU0sUUFBUSxDQUFDO0FBQ3JGLE9BQU8sRUFBRSxVQUFVLEVBQUUsTUFBTSxrQkFBa0IsQ0FBQztBQUM5QyxPQUFPLEVBQUUsaUJBQWlCLEVBQUUsTUFBTSxhQUFhLENBQUM7QUFFaEQsT0FBTyxFQUNMLGVBQWUsRUFDZixtQkFBbUIsRUFDbkIsbUJBQW1CLEdBQ3BCLE1BQU0sY0FBYyxDQUFDO0FBR3RCLE1BQU0sQ0FBQyxNQUFNLFVBQVUsR0FBRyxLQUFLLEVBQzdCLEtBQWEsRUFDYixPQUFlLEVBQ2YsUUFBNEIsRUFDNUIsZ0JBQXdCLElBQUksRUFDTCxFQUFFO0lBQ3pCLElBQUk7UUFDRixNQUFNLENBQUMsV0FBVyxFQUFFLFlBQVksQ0FBQyxHQUFHLE1BQU0sT0FBTyxDQUFDLEdBQUcsQ0FBQztZQUNwRCxRQUFRLENBQUMsT0FBTyxDQUFDO2dCQUNmLE9BQU8sRUFBRSxLQUFLLENBQUMsT0FBTztnQkFDdEIsU0FBUyxFQUFFLENBQUM7Z0JBQ1osTUFBTSxFQUFFO29CQUNOLEtBQUssQ0FBQyxFQUFFLENBQUMsbUNBQW1DLENBQUM7b0JBQzdDLElBQUk7b0JBQ0osS0FBSyxDQUFDLFVBQVUsQ0FBQyxPQUFPLEVBQUUsRUFBRSxDQUFDO2lCQUM5QjthQUNGLENBQUM7WUFDRixRQUFRLENBQUMsT0FBTyxDQUFDO2dCQUNmLE9BQU8sRUFBRSxLQUFLLENBQUMsT0FBTztnQkFDdEIsU0FBUyxFQUFFLENBQUM7Z0JBQ1osTUFBTSxFQUFFO29CQUNOLEtBQUssQ0FBQyxFQUFFLENBQUMsbUNBQW1DLENBQUM7b0JBQzdDLEtBQUssQ0FBQyxVQUFVLENBQUMsT0FBTyxFQUFFLEVB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
